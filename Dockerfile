@@ -13,9 +13,9 @@ COPY pyproject.toml poetry.lock* /app/
 
 # Install dependencies (no dev deps)
 RUN poetry config virtualenvs.create false \
- && poetry install --no-interaction --no-ansi --only main
+    && poetry install --no-interaction --no-ansi --only main
 
 # Copy app
 COPY runner.py /app/runner.py
 
-CMD ["python", "runner.py"]
+CMD ["python", "-m", "rtoe_ue.runner"]
