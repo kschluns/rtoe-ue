@@ -15,7 +15,7 @@ COPY pyproject.toml poetry.lock* /app/
 RUN poetry config virtualenvs.create false \
     && poetry install --no-interaction --no-ansi --only main
 
-# Copy app
-COPY runner.py /app/runner.py
+# Copy application package
+COPY rtoe_ue /app/rtoe_ue
 
 CMD ["python", "-m", "rtoe_ue.runner"]
