@@ -1,0 +1,8 @@
+repos:
+  - repo: local
+    hooks:
+      - id: black
+        name: black (from poetry env)
+        entry: poetry run black
+        language: system
+        types: [python]
