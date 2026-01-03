@@ -1,21 +1,27 @@
 FROM python:3.11-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    DAGSTER_HOME=/opt/dagster/dagster_home
 
 WORKDIR /app
 
-# Install Poetry
-RUN pip install --no-cache-dir poetry==1.8.3
+# Create Dagster home
+RUN mkdir -p $DAGSTER_HOME
 
 # Copy dependency files first for Docker layer caching
 COPY pyproject.toml poetry.lock* /app/
 
-# Install dependencies (no dev deps)
-RUN poetry config virtualenvs.create false \
-    && poetry install --no-interaction --no-ansi --only main
+# Copy application code (src layout)
+COPY src /app/src
 
-# Copy application package
-COPY rtoe_ue /app/rtoe_ue
+# Install runtime dependencies from pyproject.toml (PEP 621)
+# This builds/install the package and installs deps.
+RUN pip install --no-cache-dir .
 
-CMD ["python", "-m", "rtoe_ue.runner"]
+# Copy Dagster instance config
+COPY dagster/dagster.yaml $DAGSTER_HOME/dagster.yaml
+
+# Default command (still override in ECS)
+CMD ["dagster", "asset", "materialize", "-m", "rtoe_ue.definitions", "--select", "hello_world"]
+

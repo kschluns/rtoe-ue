@@ -1,0 +1,22 @@
+storage:
+  postgres:
+    postgres_db:
+      username:
+        env: DAGSTER_PG_USER
+      password:
+        env: DAGSTER_PG_PASSWORD
+      hostname:
+        env: DAGSTER_PG_HOST
+      db_name:
+        env: DAGSTER_PG_DB
+      port:
+        env: DAGSTER_PG_PORT
+
+compute_logs:
+  module: dagster_aws.s3.compute_log_manager
+  class: S3ComputeLogManager
+  config:
+    bucket:
+      env: DAGSTER_COMPUTE_LOGS_BUCKET
+    prefix: dagster-compute-logs
+    upload_interval: 30
