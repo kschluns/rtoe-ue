@@ -1,8 +1,16 @@
-from pathlib import Path
+from __future__ import annotations
 
-from dagster import definitions, load_from_defs_folder
+from dagster import Definitions
+
+from rtoe_ue.defs.assets.satcat_collection import collect_satcat_data
+from rtoe_ue.defs.resources.s3 import s3_resource
+from rtoe_ue.defs.resources.spacetrack import spacetrack_resource
 
 
-@definitions
-def defs():
-    return load_from_defs_folder(path_within_project=Path(__file__).parent)
+defs = Definitions(
+    assets=[collect_satcat_data],
+    resources={
+        "s3_resource": s3_resource,
+        "spacetrack_resource": spacetrack_resource,
+    },
+)
