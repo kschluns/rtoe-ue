@@ -1,9 +1,6 @@
 from __future__ import annotations
 
-from pathlib import Path
-import yaml
-
-from dagster import Definitions, define_asset_job
+from dagster import Definitions, define_asset_job, in_process_executor
 
 from rtoe_ue.defs.assets.satcat_collection import collect_satcat_data
 from rtoe_ue.defs.resources.s3 import s3_resource
@@ -15,11 +12,6 @@ from rtoe_ue.defs.resources.spacetrack import spacetrack_resource
 # from ...space_weather_load_rds import load_space_weather_rds
 # from ...gp_history_collection import collect_gp_history_data
 # from ...gp_history_load_rds import load_gp_history_rds
-
-
-def _load_run_config(name: str) -> dict:
-    cfg_path = Path(__file__).parent / "defs" / "run_configs" / f"{name}.yaml"
-    return yaml.safe_load(cfg_path.read_text()) or {}
 
 
 COLLECTION_ASSETS = [
@@ -38,14 +30,14 @@ collection_job = define_asset_job(
     name="collection_job",
     description="Run all data collection assets: SATCAT, Space Weather, GP History.",
     selection=[a.key for a in COLLECTION_ASSETS],
-    config=_load_run_config("collection_job"),
+    executor_def=in_process_executor,
 )
 
 # later:
 # load_rds_job = define_asset_job(
 #     name="load_rds_job",
 #     selection=[a.key for a in LOAD_ASSETS],
-#     config=_load_run_config("load_rds_job"),
+#     executor_def=in_process_executor,
 # )
 
 defs = Definitions(
