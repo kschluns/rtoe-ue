@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import io
 import json
-from datetime import datetime, timezone
 import os
-from typing import Dict, Tuple
+from datetime import datetime, timezone
+from typing import Any, Dict, Optional, Tuple
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
+from botocore.exceptions import ClientError
 from dagster import MetadataValue, asset
 
 from rtoe_ue.defs.partitions.dates import INGESTION_DATE_PARTITIONS
@@ -22,6 +24,39 @@ BUCKET = os.environ["S3_BUCKET"]
 BASE_PREFIX = "satcat"
 MANIFEST_KEY = f"{BASE_PREFIX}/_manifest/satcat_manifest.json.gz"
 INGEST_LOG_PREFIX = "ingest_logs/satcat"
+PARTITION_TZ = "America/Chicago"
+
+
+def _s3_key_exists(s3, bucket: str, key: str) -> bool:
+    try:
+        s3.head_object(Bucket=bucket, Key=key)
+        return True
+    except ClientError as e:
+        code = e.response.get("Error", {}).get("Code")
+        if code in ("404", "NoSuchKey", "NotFound"):
+            return False
+        raise
+
+
+def _s3_get_json(s3, bucket: str, key: str) -> Optional[Dict[str, Any]]:
+    try:
+        obj = s3.get_object(Bucket=bucket, Key=key)
+        raw = obj["Body"].read()
+        return json.loads(raw.decode("utf-8"))
+    except ClientError as e:
+        code = e.response.get("Error", {}).get("Code")
+        if code in ("404", "NoSuchKey", "NotFound"):
+            return None
+        raise
+
+
+def _s3_put_json(s3, bucket: str, key: str, payload: Dict[str, Any]) -> None:
+    s3.put_object(
+        Bucket=bucket,
+        Key=key,
+        Body=json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8"),
+        ContentType="application/json",
+    )
 
 
 def _normalize_satcat_df(df: pd.DataFrame) -> pd.DataFrame:
@@ -87,14 +122,21 @@ def _df_to_parquet_bytes(df: pd.DataFrame) -> bytes:
     return buf.getvalue()
 
 
+def _today_partition_key(tz_name: str) -> str:
+    tz = ZoneInfo(tz_name)
+    return datetime.now(tz=tz).date().isoformat()
+
+
 @asset(
     name="collect_satcat_data",
     partitions_def=INGESTION_DATE_PARTITIONS,
     required_resource_keys={"s3_resource", "spacetrack_resource"},
     description=(
         "Pull full SATCAT from Space-Track, compute delta vs manifest (NORAD->max FILE), "
-        "write delta parquet to S3 partitioned by ingestion_date, update manifest."
+        "write delta parquet to S3 partitioned by ingestion_date, update manifest. "
+        "NOTE: write-once partition key; if data.parquet exists, do not overwrite."
     ),
+    code_version="v2",
 )
 def collect_satcat_data(context) -> None:
     s3 = context.resources.s3_resource
@@ -103,6 +145,68 @@ def collect_satcat_data(context) -> None:
     ingestion_date = context.partition_key  # "YYYY-MM-DD"
     parquet_key = f"{BASE_PREFIX}/ingestion_date={ingestion_date}/data.parquet"
 
+    # Log keys
+    run_id = context.run_id
+    run_log_key = (
+        f"{INGEST_LOG_PREFIX}/ingestion_date={ingestion_date}/run_id={run_id}/log.json"
+    )
+    latest_log_key = f"{INGEST_LOG_PREFIX}/ingestion_date={ingestion_date}/latest.json"
+    parquet_exists = _s3_key_exists(s3, BUCKET, parquet_key)
+
+    # Check "today" semantics
+    today_key = _today_partition_key(PARTITION_TZ)
+    is_today = ingestion_date == today_key
+
+    # If parquet exists, do NOT rewrite parquet or manifest.
+    if parquet_exists or not is_today:
+        # Pull previous values from stable latest summary, so we don't "lose" metadata.
+        latest_metadata = _s3_get_json(s3, BUCKET, latest_log_key) or {}
+
+        # Determine skip reason
+        if parquet_exists:
+            skip_reason = "parquet_already_exists"
+        else:
+            skip_reason = (
+                "not today's partition: "
+                "satcat API does not support querying past or future dates"
+            )
+
+        # Always write a new run log
+        now = datetime.now(timezone.utc).isoformat()
+        log_body = {
+            "asset": "collect_satcat_data",
+            "ingestion_date": ingestion_date,
+            "run_id": run_id,
+            "timestamp_utc": now,
+            "status": "skipped_existing_partition",
+            "reason": skip_reason,
+            "delta_parquet_s3_uri": latest_metadata.get("delta_parquet_s3_uri"),
+            "manifest_s3_uri": latest_metadata.get("manifest_s3_uri"),
+            "fetched_rows": latest_metadata.get("satcat_rows_fetched"),
+            "delta_rows": latest_metadata.get("satcat_delta_rows"),
+            "updated_norads": latest_metadata.get("updated_norads"),
+        }
+        _s3_put_json(s3, BUCKET, run_log_key, log_body)
+        _s3_put_json(s3, BUCKET, latest_log_key, log_body)
+
+        # Output metadata: keep prior values, but point ingest_log to this run's log
+        context.add_output_metadata(
+            {
+                "ingestion_date": ingestion_date,
+                "satcat_rows_fetched": latest_metadata.get("satcat_rows_fetched"),
+                "satcat_delta_rows": latest_metadata.get("satcat_delta_rows"),
+                "delta_parquet": MetadataValue.path(
+                    latest_metadata.get("delta_parquet_s3_uri")
+                ),
+                "manifest": MetadataValue.path(latest_metadata.get("manifest_s3_uri")),
+                "ingest_log": MetadataValue.path(f"s3://{BUCKET}/{run_log_key}"),
+                "latest_summary": MetadataValue.path(f"s3://{BUCKET}/{latest_log_key}"),
+                "status": "skipped_existing_partition",
+            }
+        )
+        return
+
+    # Otherwise: proceed normally (write parquet + update manifest)
     # 1) Read manifest (NORAD -> max FILE)
     manifest = read_satcat_manifest_gz_json(s3, BUCKET, MANIFEST_KEY)
 
@@ -114,7 +218,7 @@ def collect_satcat_data(context) -> None:
     # 3) Compute delta rows
     delta_df, updates = _compute_delta(df, manifest)
 
-    # 4) Write delta parquet to S3 (even if empty, write an empty parquet for traceability)
+    # 4) Write delta parquet to S3
     parquet_bytes = _df_to_parquet_bytes(delta_df)
     s3.put_object(
         Bucket=BUCKET,
@@ -132,26 +236,24 @@ def collect_satcat_data(context) -> None:
     new_manifest = SatcatManifest(norad_to_max_file=new_map)
     write_satcat_manifest_gz_json(s3, BUCKET, MANIFEST_KEY, new_manifest)
 
-    # 6) Optional ingest log row (write a small json blob per partition)
+    # 6) Write run-specific ingest log (always)
     now = datetime.now(timezone.utc).isoformat()
-    log_key = f"{INGEST_LOG_PREFIX}/ingestion_date={ingestion_date}/log.json"
     log_body = {
         "asset": "collect_satcat_data",
         "ingestion_date": ingestion_date,
-        "written_parquet_s3_uri": f"s3://{BUCKET}/{parquet_key}",
+        "run_id": run_id,
+        "timestamp_utc": now,
+        "status": "materialized",
+        "delta_parquet_s3_uri": f"s3://{BUCKET}/{parquet_key}",
         "manifest_s3_uri": f"s3://{BUCKET}/{MANIFEST_KEY}",
         "fetched_rows": int(len(df)),
         "delta_rows": int(len(delta_df)),
         "updated_norads": int(len(updates)),
-        "timestamp_utc": now,
     }
-    s3.put_object(
-        Bucket=BUCKET,
-        Key=log_key,
-        Body=json.dumps(log_body, separators=(",", ":")).encode("utf-8"),
-        ContentType="application/json",
-    )
+    _s3_put_json(s3, BUCKET, run_log_key, log_body)
+    _s3_put_json(s3, BUCKET, latest_log_key, log_body)
 
+    # Output metadata
     context.add_output_metadata(
         {
             "ingestion_date": ingestion_date,
@@ -159,6 +261,8 @@ def collect_satcat_data(context) -> None:
             "satcat_delta_rows": len(delta_df),
             "delta_parquet": MetadataValue.path(f"s3://{BUCKET}/{parquet_key}"),
             "manifest": MetadataValue.path(f"s3://{BUCKET}/{MANIFEST_KEY}"),
-            "ingest_log": MetadataValue.path(f"s3://{BUCKET}/{log_key}"),
+            "ingest_log": MetadataValue.path(f"s3://{BUCKET}/{run_log_key}"),
+            "latest_summary": MetadataValue.path(f"s3://{BUCKET}/{latest_log_key}"),
+            "status": "materialized",
         }
     )
