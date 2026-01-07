@@ -6,3 +6,8 @@ repos:
         entry: poetry run black
         language: system
         types: [python]
+      - id: dagster-asset-code-version-bump
+        name: Require Dagster @asset code_version bump when asset function body changes
+        entry: poetry run python src/rtoe_ue/precommit_check_asset_code_versions.py
+        language: system
+        pass_filenames: false
