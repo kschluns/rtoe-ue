@@ -32,11 +32,13 @@ run_launcher:
   module: dagster_aws.ecs
   class: EcsRunLauncher
   config:
+    task_definition: rtoe-ue-dagster-runner
+
     # Easiest pattern: inherit most ECS settings from the daemon task’s environment
     use_current_ecs_task_config: true
 
     # Name of the container in the run task definition that will execute the run
-    container_name: run
+    container_name: runner
 
     # Skip passing env vars explcitly; inherit from the daemon task’s environment
     # env_vars:

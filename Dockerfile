@@ -23,5 +23,5 @@ RUN pip install --no-cache-dir .
 COPY dagster/dagster.yaml $DAGSTER_HOME/dagster.yaml
 
 # Default command (still override in ECS)
-CMD ["dagster", "asset", "materialize", "-m", "rtoe_ue.definitions", "--select", "hello_world"]
+CMD ["dagster", "--help"]
 
