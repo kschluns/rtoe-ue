@@ -136,133 +136,138 @@ def _today_partition_key(tz_name: str) -> str:
         "write delta parquet to S3 partitioned by ingestion_date, update manifest. "
         "NOTE: write-once partition key; if data.parquet exists, do not overwrite."
     ),
-    code_version="v2",
+    code_version="v3",
 )
 def collect_satcat_data(context) -> None:
     s3 = context.resources.s3_resource
     spacetrack = context.resources.spacetrack_resource
 
-    ingestion_date = context.partition_key  # "YYYY-MM-DD"
-    parquet_key = f"{BASE_PREFIX}/ingestion_date={ingestion_date}/data.parquet"
+    for ingestion_date in context.partition_keys:  # Works whether 1 or many
 
-    # Log keys
-    run_id = context.run_id
-    run_log_key = (
-        f"{INGEST_LOG_PREFIX}/ingestion_date={ingestion_date}/run_id={run_id}/log.json"
-    )
-    latest_log_key = f"{INGEST_LOG_PREFIX}/ingestion_date={ingestion_date}/latest.json"
-    parquet_exists = _s3_key_exists(s3, BUCKET, parquet_key)
+        parquet_key = f"{BASE_PREFIX}/ingestion_date={ingestion_date}/data.parquet"
 
-    # Check "today" semantics
-    today_key = _today_partition_key(PARTITION_TZ)
-    is_today = ingestion_date == today_key
+        # Log keys
+        run_id = context.run_id
+        run_log_key = f"{INGEST_LOG_PREFIX}/ingestion_date={ingestion_date}/run_id={run_id}/log.json"
+        latest_log_key = (
+            f"{INGEST_LOG_PREFIX}/ingestion_date={ingestion_date}/latest.json"
+        )
+        parquet_exists = _s3_key_exists(s3, BUCKET, parquet_key)
 
-    # If parquet exists, do NOT rewrite parquet or manifest.
-    if parquet_exists or not is_today:
-        # Pull previous values from stable latest summary, so we don't "lose" metadata.
-        latest_metadata = _s3_get_json(s3, BUCKET, latest_log_key) or {}
+        # Check "today" semantics
+        today_key = _today_partition_key(PARTITION_TZ)
+        is_today = ingestion_date == today_key
 
-        # Determine skip reason
-        if parquet_exists:
-            skip_reason = "parquet_already_exists"
-        else:
-            skip_reason = (
-                "not today's partition: "
-                "satcat API does not support querying past or future dates"
+        # If parquet exists, do NOT rewrite parquet or manifest.
+        if parquet_exists or not is_today:
+            # Pull previous values from stable latest summary, so we don't "lose" metadata.
+            latest_metadata = _s3_get_json(s3, BUCKET, latest_log_key) or {}
+
+            # Determine skip reason
+            if parquet_exists:
+                skip_reason = "parquet_already_exists"
+            else:
+                skip_reason = (
+                    "not today's partition: "
+                    "satcat API does not support querying past or future dates"
+                )
+
+            # Always write a new run log
+            now = datetime.now(timezone.utc).isoformat()
+            log_body = {
+                "asset": "collect_satcat_data",
+                "ingestion_date": ingestion_date,
+                "run_id": run_id,
+                "timestamp_utc": now,
+                "status": "skipped_existing_partition",
+                "reason": skip_reason,
+                "delta_parquet_s3_uri": latest_metadata.get("delta_parquet_s3_uri"),
+                "manifest_s3_uri": latest_metadata.get("manifest_s3_uri"),
+                "fetched_rows": latest_metadata.get("satcat_rows_fetched"),
+                "delta_rows": latest_metadata.get("satcat_delta_rows"),
+                "updated_norads": latest_metadata.get("updated_norads"),
+            }
+            _s3_put_json(s3, BUCKET, run_log_key, log_body)
+            _s3_put_json(s3, BUCKET, latest_log_key, log_body)
+
+            # Output metadata: keep prior values, but point ingest_log to this run's log
+            context.add_output_metadata(
+                {
+                    "ingestion_date": ingestion_date,
+                    "satcat_rows_fetched": latest_metadata.get("satcat_rows_fetched"),
+                    "satcat_delta_rows": latest_metadata.get("satcat_delta_rows"),
+                    "delta_parquet": MetadataValue.path(
+                        latest_metadata.get("delta_parquet_s3_uri")
+                    ),
+                    "manifest": MetadataValue.path(
+                        latest_metadata.get("manifest_s3_uri")
+                    ),
+                    "ingest_log": MetadataValue.path(f"s3://{BUCKET}/{run_log_key}"),
+                    "latest_summary": MetadataValue.path(
+                        f"s3://{BUCKET}/{latest_log_key}"
+                    ),
+                    "status": "skipped_existing_partition",
+                }
             )
+            return
 
-        # Always write a new run log
+        # Otherwise: proceed normally (write parquet + update manifest)
+        # 1) Read manifest (NORAD -> max FILE)
+        manifest = read_satcat_manifest_gz_json(s3, BUCKET, MANIFEST_KEY)
+
+        # 2) Pull full SATCAT data
+        raw = spacetrack.fetch_satcat()
+        df = pd.DataFrame(raw)
+        df = _normalize_satcat_df(df)
+
+        # 3) Compute delta rows
+        delta_df, updates = _compute_delta(df, manifest)
+
+        # 4) Write delta parquet to S3
+        parquet_bytes = _df_to_parquet_bytes(delta_df)
+        s3.put_object(
+            Bucket=BUCKET,
+            Key=parquet_key,
+            Body=parquet_bytes,
+            ContentType="application/octet-stream",
+        )
+
+        # 5) Update manifest with net-new max FILE values from what we published
+        new_map = dict(manifest.norad_to_max_file)
+        for norad, new_max in updates.items():
+            old = new_map.get(norad)
+            if old is None or new_max > old:
+                new_map[norad] = new_max
+        new_manifest = SatcatManifest(norad_to_max_file=new_map)
+        write_satcat_manifest_gz_json(s3, BUCKET, MANIFEST_KEY, new_manifest)
+
+        # 6) Write run-specific ingest log (always)
         now = datetime.now(timezone.utc).isoformat()
         log_body = {
             "asset": "collect_satcat_data",
             "ingestion_date": ingestion_date,
             "run_id": run_id,
             "timestamp_utc": now,
-            "status": "skipped_existing_partition",
-            "reason": skip_reason,
-            "delta_parquet_s3_uri": latest_metadata.get("delta_parquet_s3_uri"),
-            "manifest_s3_uri": latest_metadata.get("manifest_s3_uri"),
-            "fetched_rows": latest_metadata.get("satcat_rows_fetched"),
-            "delta_rows": latest_metadata.get("satcat_delta_rows"),
-            "updated_norads": latest_metadata.get("updated_norads"),
+            "status": "materialized",
+            "delta_parquet_s3_uri": f"s3://{BUCKET}/{parquet_key}",
+            "manifest_s3_uri": f"s3://{BUCKET}/{MANIFEST_KEY}",
+            "fetched_rows": int(len(df)),
+            "delta_rows": int(len(delta_df)),
+            "updated_norads": int(len(updates)),
         }
         _s3_put_json(s3, BUCKET, run_log_key, log_body)
         _s3_put_json(s3, BUCKET, latest_log_key, log_body)
 
-        # Output metadata: keep prior values, but point ingest_log to this run's log
+        # Output metadata
         context.add_output_metadata(
             {
                 "ingestion_date": ingestion_date,
-                "satcat_rows_fetched": latest_metadata.get("satcat_rows_fetched"),
-                "satcat_delta_rows": latest_metadata.get("satcat_delta_rows"),
-                "delta_parquet": MetadataValue.path(
-                    latest_metadata.get("delta_parquet_s3_uri")
-                ),
-                "manifest": MetadataValue.path(latest_metadata.get("manifest_s3_uri")),
+                "satcat_rows_fetched": len(df),
+                "satcat_delta_rows": len(delta_df),
+                "delta_parquet": MetadataValue.path(f"s3://{BUCKET}/{parquet_key}"),
+                "manifest": MetadataValue.path(f"s3://{BUCKET}/{MANIFEST_KEY}"),
                 "ingest_log": MetadataValue.path(f"s3://{BUCKET}/{run_log_key}"),
                 "latest_summary": MetadataValue.path(f"s3://{BUCKET}/{latest_log_key}"),
-                "status": "skipped_existing_partition",
+                "status": "materialized",
             }
         )
-        return
-
-    # Otherwise: proceed normally (write parquet + update manifest)
-    # 1) Read manifest (NORAD -> max FILE)
-    manifest = read_satcat_manifest_gz_json(s3, BUCKET, MANIFEST_KEY)
-
-    # 2) Pull full SATCAT data
-    raw = spacetrack.fetch_satcat()
-    df = pd.DataFrame(raw)
-    df = _normalize_satcat_df(df)
-
-    # 3) Compute delta rows
-    delta_df, updates = _compute_delta(df, manifest)
-
-    # 4) Write delta parquet to S3
-    parquet_bytes = _df_to_parquet_bytes(delta_df)
-    s3.put_object(
-        Bucket=BUCKET,
-        Key=parquet_key,
-        Body=parquet_bytes,
-        ContentType="application/octet-stream",
-    )
-
-    # 5) Update manifest with net-new max FILE values from what we published
-    new_map = dict(manifest.norad_to_max_file)
-    for norad, new_max in updates.items():
-        old = new_map.get(norad)
-        if old is None or new_max > old:
-            new_map[norad] = new_max
-    new_manifest = SatcatManifest(norad_to_max_file=new_map)
-    write_satcat_manifest_gz_json(s3, BUCKET, MANIFEST_KEY, new_manifest)
-
-    # 6) Write run-specific ingest log (always)
-    now = datetime.now(timezone.utc).isoformat()
-    log_body = {
-        "asset": "collect_satcat_data",
-        "ingestion_date": ingestion_date,
-        "run_id": run_id,
-        "timestamp_utc": now,
-        "status": "materialized",
-        "delta_parquet_s3_uri": f"s3://{BUCKET}/{parquet_key}",
-        "manifest_s3_uri": f"s3://{BUCKET}/{MANIFEST_KEY}",
-        "fetched_rows": int(len(df)),
-        "delta_rows": int(len(delta_df)),
-        "updated_norads": int(len(updates)),
-    }
-    _s3_put_json(s3, BUCKET, run_log_key, log_body)
-    _s3_put_json(s3, BUCKET, latest_log_key, log_body)
-
-    # Output metadata
-    context.add_output_metadata(
-        {
-            "ingestion_date": ingestion_date,
-            "satcat_rows_fetched": len(df),
-            "satcat_delta_rows": len(delta_df),
-            "delta_parquet": MetadataValue.path(f"s3://{BUCKET}/{parquet_key}"),
-            "manifest": MetadataValue.path(f"s3://{BUCKET}/{MANIFEST_KEY}"),
-            "ingest_log": MetadataValue.path(f"s3://{BUCKET}/{run_log_key}"),
-            "latest_summary": MetadataValue.path(f"s3://{BUCKET}/{latest_log_key}"),
-            "status": "materialized",
-        }
-    )
