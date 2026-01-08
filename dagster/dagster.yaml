@@ -38,19 +38,19 @@ run_launcher:
     # Name of the container in the run task definition that will execute the run
     container_name: run
 
-    # Optional: pass env vars explicitly
-    env_vars:
-      - DAGSTER_HOME
-      - DAGSTER_PG_USER
-      - DAGSTER_PG_PASSWORD
-      - DAGSTER_PG_HOST
-      - DAGSTER_PG_DB
-      - DAGSTER_PG_PORT
-      - DAGSTER_COMPUTE_LOGS_BUCKET
-      - AWS_REGION
-      - S3_BUCKET
-      - SPACE_TRACK_USERNAME
-      - SPACE_TRACK_PASSWORD
+    # Skip passing env vars explcitly; inherit from the daemon task’s environment
+    # env_vars:
+    #   - DAGSTER_HOME
+    #   - DAGSTER_PG_USER
+    #   - DAGSTER_PG_PASSWORD
+    #   - DAGSTER_PG_HOST
+    #   - DAGSTER_PG_DB
+    #   - DAGSTER_PG_PORT
+    #   - DAGSTER_COMPUTE_LOGS_BUCKET
+    #   - AWS_REGION
+    #   - S3_BUCKET
+    #   - SPACE_TRACK_USERNAME
+    #   - SPACE_TRACK_PASSWORD
 
     # Optional: override task/run sizing
     # run_resources:
