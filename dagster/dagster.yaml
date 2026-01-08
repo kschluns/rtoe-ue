@@ -20,3 +20,62 @@ compute_logs:
       env: DAGSTER_COMPUTE_LOGS_BUCKET
     prefix: dagster-compute-logs
     upload_interval: 30
+
+run_coordinator:
+  module: dagster.core.run_coordinator
+  class: QueuedRunCoordinator
+  config:
+    max_concurrent_runs: 10   # pick something sane
+    # tag_concurrency_limits: []   # optional later
+
+run_launcher:
+  module: dagster_aws.ecs
+  class: EcsRunLauncher
+  config:
+    # Easiest pattern: inherit most ECS settings from the daemon task’s environment
+    use_current_ecs_task_config: true
+
+    # Name of the container in the run task definition that will execute the run
+    container_name: run
+
+    # Optional: pass env vars explicitly
+    env_vars:
+      - DAGSTER_HOME
+      - DAGSTER_PG_USER
+      - DAGSTER_PG_PASSWORD
+      - DAGSTER_PG_HOST
+      - DAGSTER_PG_DB
+      - DAGSTER_PG_PORT
+      - DAGSTER_COMPUTE_LOGS_BUCKET
+      - AWS_REGION
+      - S3_BUCKET
+      - SPACE_TRACK_USERNAME
+      - SPACE_TRACK_PASSWORD
+
+    # Optional: override task/run sizing
+    # run_resources:
+    #   cpu: "1024"
+    #   memory: "2048"
+
+    # Optional: if you want to override networking explicitly
+    # run_task_kwargs:
+    #   cluster: "your-cluster-name"
+    #   launchType: "FARGATE"
+    #   networkConfiguration:
+    #     awsvpcConfiguration:
+    #       subnets: ["subnet-..."]
+    #       securityGroups: ["sg-..."]
+    #       assignPublicIp: "DISABLED"
+    
+schedules:
+  use_threads: true
+  num_workers: 4
+
+sensors:
+  use_threads: true
+  num_workers: 4
+  num_submit_workers: 4
+
+backfills:
+  use_threads: true
+  num_workers: 2
