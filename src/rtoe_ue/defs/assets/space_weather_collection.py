@@ -62,21 +62,21 @@ def _s3_put_json(s3, bucket: str, key: str, payload: Dict[str, Any]) -> None:
 def _normalize_space_weather_df(df: pd.DataFrame) -> pd.DataFrame:
     """
     Minimal normalization:
-      - ensure OBS_DATE exists (as YYYY-MM-DD string)
-      - drop rows without OBS_DATE
+      - ensure DATE exists (as YYYY-MM-DD string)
+      - drop rows without DATE
     """
-    if "OBS_DATE" not in df.columns:
-        raise RuntimeError("Space weather response missing OBS_DATE")
+    if "DATE" not in df.columns:
+        raise RuntimeError("Space weather response missing DATE")
 
     out = df.copy()
 
     # Try to coerce to date, then ISO string
     # Handles strings, datetimes, etc.
-    obs = pd.to_datetime(out["OBS_DATE"], errors="coerce", utc=True)
-    out["OBS_DATE"] = obs.dt.date.astype("string")
+    obs = pd.to_datetime(out["DATE"], errors="coerce", utc=True)
+    out["DATE"] = obs.dt.date.astype("string")
 
     # Drop unusable rows
-    out = out.loc[out["OBS_DATE"].notna() & (out["OBS_DATE"] != "")]
+    out = out.loc[out["DATE"].notna() & (out["DATE"] != "")]
     return out
 
 
@@ -85,14 +85,14 @@ def _compute_delta(
 ) -> Tuple[pd.DataFrame, Set[str]]:
     """
     Returns:
-      - delta_df: rows whose OBS_DATE not in manifest.obs_dates
-      - updates: set of net-new OBS_DATE values present in delta_df
+      - delta_df: rows whose DATE not in manifest.obs_dates
+      - updates: set of net-new DATE values present in delta_df
     """
     api_df = api_df.copy()
     existing = manifest.obs_dates
-    delta_mask = ~api_df["OBS_DATE"].isin(list(existing))
+    delta_mask = ~api_df["DATE"].isin(list(existing))
     delta_df = api_df.loc[delta_mask]
-    updates = set(delta_df["OBS_DATE"].dropna().astype(str).tolist())
+    updates = set(delta_df["DATE"].dropna().astype(str).tolist())
     return delta_df, updates
 
 
@@ -113,7 +113,7 @@ def _today_partition_key(tz_name: str) -> str:
     partitions_def=INGESTION_DATE_PARTITIONS,
     required_resource_keys={"s3_resource", "celestrak_resource"},
     description=(
-        "Pull full space weather data from CelesTrak, compute delta vs manifest (OBS_DATE list), "
+        "Pull full space weather data from CelesTrak, compute delta vs manifest (DATE list), "
         "write delta parquet to S3 partitioned by ingestion_date, update manifest. "
         "NOTE: write-once partition key; if data.parquet exists, do not overwrite. "
         "Also skip if ingestion_date != today's partition (API isn't date-parameterized here)."
@@ -204,7 +204,7 @@ def collect_space_weather_data(context) -> None:
         df: pd.DataFrame = celestrak.fetch_space_weather_df()
         df = _normalize_space_weather_df(df)
 
-        # 3) Compute delta rows: OBS_DATE not in manifest
+        # 3) Compute delta rows: DATE not in manifest
         delta_df, updates = _compute_delta(df, manifest)
 
         # 4) Write delta parquet to S3
