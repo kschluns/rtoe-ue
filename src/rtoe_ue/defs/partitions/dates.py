@@ -15,6 +15,6 @@ INGESTION_DATE_PARTITIONS = DailyPartitionsDefinition(
 CREATION_DATE_PARTITIONS = DailyPartitionsDefinition(
     start_date="2025-01-01",
     timezone="America/Chicago",
-    # include "today" as a valid partition key
-    end_offset=1,
+    # exclude "today" as a valid partition key
+    end_offset=0,
 )

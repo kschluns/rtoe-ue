@@ -26,7 +26,10 @@ run_coordinator:
   class: QueuedRunCoordinator
   config:
     max_concurrent_runs: 10   # pick something sane
-    # tag_concurrency_limits: []   # optional later
+    tag_concurrency_limits:
+      - key: "concurrency_group"
+        value: "spacetrack_gp_history"
+        limit: 1
 
 run_launcher:
   module: dagster_aws.ecs
