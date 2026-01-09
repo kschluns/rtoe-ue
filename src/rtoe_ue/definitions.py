@@ -5,6 +5,7 @@ from dagster import Definitions, define_asset_job, in_process_executor
 from rtoe_ue.defs.assets.satcat_collection import collect_satcat_data
 from rtoe_ue.defs.assets.space_weather_collection import collect_space_weather_data
 from rtoe_ue.defs.resources.s3 import s3_resource
+from rtoe_ue.defs.resources.celestrak import celestrak_resource
 from rtoe_ue.defs.resources.spacetrack import spacetrack_resource
 
 # later:
@@ -46,6 +47,7 @@ defs = Definitions(
     resources={
         "s3_resource": s3_resource,
         "spacetrack_resource": spacetrack_resource,
+        "celestrak_resource": celestrak_resource,
         # later: <-- add "postgres_resource": ...,
     },
 )
