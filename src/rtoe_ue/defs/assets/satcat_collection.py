@@ -136,7 +136,7 @@ def _today_partition_key(tz_name: str) -> str:
         "write delta parquet to S3 partitioned by ingestion_date, update manifest. "
         "NOTE: write-once partition key; if data.parquet exists, do not overwrite."
     ),
-    code_version="v3",
+    code_version="v4",
 )
 def collect_satcat_data(context) -> None:
     s3 = context.resources.s3_resource
@@ -183,8 +183,8 @@ def collect_satcat_data(context) -> None:
                 "reason": skip_reason,
                 "delta_parquet_s3_uri": latest_metadata.get("delta_parquet_s3_uri"),
                 "manifest_s3_uri": latest_metadata.get("manifest_s3_uri"),
-                "fetched_rows": latest_metadata.get("satcat_rows_fetched"),
-                "delta_rows": latest_metadata.get("satcat_delta_rows"),
+                "fetched_rows": latest_metadata.get("fetched_rows"),
+                "delta_rows": latest_metadata.get("delta_rows"),
                 "updated_norads": latest_metadata.get("updated_norads"),
             }
             _s3_put_json(s3, BUCKET, run_log_key, log_body)
@@ -194,8 +194,8 @@ def collect_satcat_data(context) -> None:
             context.add_output_metadata(
                 {
                     "ingestion_date": ingestion_date,
-                    "satcat_rows_fetched": latest_metadata.get("satcat_rows_fetched"),
-                    "satcat_delta_rows": latest_metadata.get("satcat_delta_rows"),
+                    "satcat_rows_fetched": latest_metadata.get("fetched_rows"),
+                    "satcat_delta_rows": latest_metadata.get("delta_rows"),
                     "delta_parquet": MetadataValue.path(
                         latest_metadata.get("delta_parquet_s3_uri")
                     ),
@@ -207,6 +207,7 @@ def collect_satcat_data(context) -> None:
                         f"s3://{BUCKET}/{latest_log_key}"
                     ),
                     "status": "skipped_existing_partition",
+                    "reason": skip_reason,
                 }
             )
             return
