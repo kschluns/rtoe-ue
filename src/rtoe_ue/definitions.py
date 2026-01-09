@@ -3,12 +3,12 @@ from __future__ import annotations
 from dagster import Definitions, define_asset_job, in_process_executor
 
 from rtoe_ue.defs.assets.satcat_collection import collect_satcat_data
+from rtoe_ue.defs.assets.space_weather_collection import collect_space_weather_data
 from rtoe_ue.defs.resources.s3 import s3_resource
 from rtoe_ue.defs.resources.spacetrack import spacetrack_resource
 
 # later:
 # from rtoe_ue.defs.assets.satcat_load_rds import load_satcat_rds
-# from ...space_weather_collection import collect_space_weather_data
 # from ...space_weather_load_rds import load_space_weather_rds
 # from ...gp_history_collection import collect_gp_history_data
 # from ...gp_history_load_rds import load_gp_history_rds
@@ -16,7 +16,7 @@ from rtoe_ue.defs.resources.spacetrack import spacetrack_resource
 
 COLLECTION_ASSETS = [
     collect_satcat_data,
-    # collect_space_weather_data,
+    collect_space_weather_data,
     # collect_gp_history_data,
 ]
 
