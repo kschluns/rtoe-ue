@@ -118,7 +118,7 @@ def _today_partition_key(tz_name: str) -> str:
         "NOTE: write-once partition key; if data.parquet exists, do not overwrite. "
         "Also skip if ingestion_date != today's partition (API isn't date-parameterized here)."
     ),
-    code_version="v1",
+    code_version="v2",
 )
 def collect_space_weather_data(context) -> None:
     s3 = context.resources.s3_resource
@@ -201,7 +201,7 @@ def collect_space_weather_data(context) -> None:
         manifest = read_space_weather_manifest_gz_json(s3, BUCKET, MANIFEST_KEY)
 
         # 2) Pull full space weather data from CelesTrak
-        df: pd.DataFrame = celestrak.fetch_space_weather()
+        df: pd.DataFrame = celestrak.fetch_space_weather_df()
         df = _normalize_space_weather_df(df)
 
         # 3) Compute delta rows: OBS_DATE not in manifest
