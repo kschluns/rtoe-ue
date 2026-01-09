@@ -40,6 +40,9 @@ run_launcher:
     # Name of the container in the run task definition that will execute the run
     container_name: runner
 
+    # IMPORTANT: disable Secrets Manager auto-injection
+    secrets_tag: ""
+
     # Skip passing env vars explcitly; inherit from the daemon task’s environment
     # env_vars:
     #   - DAGSTER_HOME
