@@ -92,25 +92,31 @@ def _compute_delta(
       - delta_df: rows whose FILE is newer than manifest max for that NORAD, or NORAD not present in manifest
       - updates: dict of NORAD->new_max_file based on delta_df
     """
-    # Map manifest max file per NORAD into df
-    # (manifest keys are strings)
-    max_map = manifest.norad_to_max_file
     satcat_df = satcat_df.copy()
+
+    # Manifest map is str -> int (or missing); map onto a nullable Int64 series
     satcat_df["manifest_max_file"] = (
-        satcat_df["NORAD_CAT_ID"].map(max_map).astype("float")
+        satcat_df["NORAD_CAT_ID"]
+        .map(manifest.norad_to_max_file)
+        .pipe(pd.to_numeric, errors="coerce")
+        .astype("Int64")
     )
 
-    # delta condition: FILE > manifest_max OR manifest_max is null
-    file_as_float = satcat_df["FILE"].astype("float")
-    delta_mask = satcat_df["manifest_max_file"].isna() | (
-        file_as_float > satcat_df["manifest_max_file"]
-    )
+    # FILE is already Int64 from _normalize_satcat_df
+    file_s = satcat_df["FILE"].astype("Int64")
+    max_s = satcat_df["manifest_max_file"]  # Int64 nullable
+
+    # Delta: new NORAD (max is null) OR FILE > max
+    # Use fillna(-1) to make the comparison null-safe without floats.
+    delta_mask = max_s.isna() | (file_s > max_s.fillna(-1))
+
     delta_df = satcat_df.loc[delta_mask].drop(columns=["manifest_max_file"])
 
-    # compute manifest updates based on delta_df
-    # new max file per NORAD = max(FILE) in delta
-    updates_series = delta_df.groupby("NORAD_CAT_ID")["FILE"].max().astype(int)
-    updates: Dict[str, int] = updates_series.to_dict()
+    # updates: new max per NORAD among delta rows
+    updates_series = delta_df.groupby("NORAD_CAT_ID")["FILE"].max()
+
+    # updates_series is nullable Int64; drop nulls defensively and convert to plain int
+    updates: Dict[str, int] = updates_series.dropna().astype("int64").to_dict()
 
     return delta_df, updates
 
@@ -134,9 +140,10 @@ def _today_partition_key(tz_name: str) -> str:
     description=(
         "Pull full SATCAT from Space-Track, compute delta vs manifest (NORAD->max FILE), "
         "write delta parquet to S3 partitioned by ingestion_date, update manifest. "
-        "NOTE: write-once partition key; if data.parquet exists, do not overwrite."
+        "NOTE: write-once partition key; if data.parquet exists, do not overwrite. "
+        "Also skip if ingestion_date != today's partition (API isn't date-parameterized here)."
     ),
-    code_version="v4",
+    code_version="v5",
 )
 def collect_satcat_data(context) -> None:
     s3 = context.resources.s3_resource
@@ -186,6 +193,9 @@ def collect_satcat_data(context) -> None:
                 "fetched_rows": latest_metadata.get("fetched_rows"),
                 "delta_rows": latest_metadata.get("delta_rows"),
                 "updated_norads": latest_metadata.get("updated_norads"),
+                "did_fetch": False,
+                "did_write_parquet": False,
+                "did_update_manifest": False,
             }
             _s3_put_json(s3, BUCKET, run_log_key, log_body)
             _s3_put_json(s3, BUCKET, latest_log_key, log_body)
@@ -210,7 +220,7 @@ def collect_satcat_data(context) -> None:
                     "reason": skip_reason,
                 }
             )
-            return
+            continue
 
         # Otherwise: proceed normally (write parquet + update manifest)
         # 1) Read manifest (NORAD -> max FILE)
@@ -255,6 +265,9 @@ def collect_satcat_data(context) -> None:
             "fetched_rows": int(len(df)),
             "delta_rows": int(len(delta_df)),
             "updated_norads": int(len(updates)),
+            "did_fetch": True,
+            "did_write_parquet": True,
+            "did_update_manifest": True,
         }
         _s3_put_json(s3, BUCKET, run_log_key, log_body)
         _s3_put_json(s3, BUCKET, latest_log_key, log_body)
