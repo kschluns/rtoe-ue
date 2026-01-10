@@ -11,7 +11,7 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 from botocore.exceptions import ClientError
-from dagster import BackfillPolicy, Failure, MetadataValue, asset
+from dagster import BackfillPolicy, Failure, MetadataValue, asset, AssetMaterialization
 
 from rtoe_ue.defs.partitions.dates import CREATION_DATE_PARTITIONS
 
@@ -76,7 +76,7 @@ def _today_partition_key(tz_name: str) -> str:
         "Write-once: if parquet exists, skip (no failure). "
         "Disallow running for today's date: fail but continue other partitions."
     ),
-    code_version="v1",
+    code_version="v2",
 )
 def collect_gp_history_data(context) -> None:
     s3 = context.resources.s3_resource
@@ -84,6 +84,8 @@ def collect_gp_history_data(context) -> None:
 
     today_key = _today_partition_key(PARTITION_TZ)
     failures: list[str] = []
+    materialized_count = 0
+    skipped_count = 0
 
     for creation_date_key in context.partition_keys:
         parquet_key = f"{BASE_PREFIX}/creation_date={creation_date_key}/data.parquet"
@@ -114,21 +116,30 @@ def collect_gp_history_data(context) -> None:
             _s3_put_json(s3, BUCKET, run_log_key, log_body)
             _s3_put_json(s3, BUCKET, latest_log_key, log_body)
 
-            context.add_output_metadata(
-                {
-                    "creation_date": creation_date_key,
-                    "gp_history_rows_fetched": latest_metadata.get("fetched_rows"),
-                    "data_parquet": MetadataValue.path(
-                        latest_metadata.get("data_parquet_s3_uri")
-                    ),
-                    "ingest_log": MetadataValue.path(f"s3://{BUCKET}/{run_log_key}"),
-                    "latest_summary": MetadataValue.path(
-                        f"s3://{BUCKET}/{latest_log_key}"
-                    ),
-                    "status": "skipped_partition",
-                    "reason": "parquet_already_exists",
-                }
+            context.log_event(
+                AssetMaterialization(
+                    asset_key=context.asset_key,
+                    partition=creation_date_key,
+                    metadata={
+                        "creation_date": creation_date_key,
+                        "gp_history_rows_fetched": latest_metadata.get("fetched_rows"),
+                        "data_parquet": MetadataValue.path(
+                            latest_metadata.get("data_parquet_s3_uri")
+                        ),
+                        "ingest_log": MetadataValue.path(
+                            f"s3://{BUCKET}/{run_log_key}"
+                        ),
+                        "latest_summary": MetadataValue.path(
+                            f"s3://{BUCKET}/{latest_log_key}"
+                        ),
+                        "status": "skipped_partition",
+                        "reason": "parquet_already_exists",
+                    },
+                )
             )
+
+            skipped_count += 1
+
             continue
 
         # 2) Disallow today's date: record failure but continue loop
@@ -185,18 +196,28 @@ def collect_gp_history_data(context) -> None:
             _s3_put_json(s3, BUCKET, run_log_key, log_body)
             _s3_put_json(s3, BUCKET, latest_log_key, log_body)
 
-            context.add_output_metadata(
-                {
-                    "creation_date": creation_date_key,
-                    "gp_history_rows_fetched": len(df),
-                    "data_parquet": MetadataValue.path(f"s3://{BUCKET}/{parquet_key}"),
-                    "ingest_log": MetadataValue.path(f"s3://{BUCKET}/{run_log_key}"),
-                    "latest_summary": MetadataValue.path(
-                        f"s3://{BUCKET}/{latest_log_key}"
-                    ),
-                    "status": "materialized",
-                }
+            context.log_event(
+                AssetMaterialization(
+                    asset_key=context.asset_key,
+                    partition=creation_date_key,
+                    metadata={
+                        "creation_date": creation_date_key,
+                        "gp_history_rows_fetched": len(df),
+                        "data_parquet": MetadataValue.path(
+                            f"s3://{BUCKET}/{parquet_key}"
+                        ),
+                        "ingest_log": MetadataValue.path(
+                            f"s3://{BUCKET}/{run_log_key}"
+                        ),
+                        "latest_summary": MetadataValue.path(
+                            f"s3://{BUCKET}/{latest_log_key}"
+                        ),
+                        "status": "materialized",
+                    },
+                )
             )
+
+            materialized_count += 1
 
         except Failure as e:
             # If SpaceTrackClient exhausts rate limit retries, you get a Failure here.
@@ -213,6 +234,7 @@ def collect_gp_history_data(context) -> None:
             _s3_put_json(s3, BUCKET, run_log_key, log_body)
             _s3_put_json(s3, BUCKET, latest_log_key, log_body)
             failures.append(f"{creation_date_key}: {e}")
+            continue
 
         except Exception as e:
             now = datetime.now(timezone.utc).isoformat()
@@ -228,6 +250,16 @@ def collect_gp_history_data(context) -> None:
             _s3_put_json(s3, BUCKET, run_log_key, log_body)
             _s3_put_json(s3, BUCKET, latest_log_key, log_body)
             failures.append(f"{creation_date_key}: {repr(e)}")
+            continue
+
+    context.add_output_metadata(
+        {
+            "partitions_attempted": len(context.partition_keys),
+            "partitions_materialized": materialized_count,
+            "partitions_skipped": skipped_count,
+            "partitions_failed": len(failures),
+        }
+    )
 
     # If any partitions were disallowed or failed, fail the run after processing all partitions.
     # This satisfies: "create a failure in Dagster, but shouldn't prevent the loop continuing other dates."
