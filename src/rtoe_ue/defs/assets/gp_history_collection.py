@@ -17,8 +17,8 @@ from dagster import (
     Failure,
     MetadataValue,
     asset,
+    AssetMaterialization,
     AssetObservation,
-    MaterializeResult,
 )
 
 from rtoe_ue.defs.partitions.dates import CREATION_DATE_PARTITIONS
@@ -121,9 +121,10 @@ def _today_partition_key(tz_name: str) -> str:
         "Write-once: if parquet exists, skip (no failure). "
         "Disallow running for today's date: fail but continue other partitions."
     ),
-    code_version="v6",
+    output_required=False,
+    code_version="v7",
 )
-def collect_gp_history_data(context) -> Iterator[MaterializeResult]:
+def collect_gp_history_data(context) -> Iterator[AssetMaterialization]:
     s3 = context.resources.s3_resource
     spacetrack = context.resources.spacetrack_resource
 
@@ -163,8 +164,9 @@ def collect_gp_history_data(context) -> Iterator[MaterializeResult]:
 
             skipped_count += 1
 
-            yield MaterializeResult(
+            yield AssetMaterialization(
                 asset_key=context.asset_key,
+                partition=creation_date_key,
                 metadata={
                     "creation_date": creation_date_key,
                     "gp_history_rows_fetched": latest_metadata.get("fetched_rows"),
@@ -247,8 +249,9 @@ def collect_gp_history_data(context) -> Iterator[MaterializeResult]:
 
             materialized_count += 1
 
-            yield MaterializeResult(
+            yield AssetMaterialization(
                 asset_key=context.asset_key,
+                partition=creation_date_key,
                 metadata={
                     "creation_date": creation_date_key,
                     "gp_history_rows_fetched": rows_fetched,
