@@ -5,7 +5,7 @@ import io
 import json
 import os
 from datetime import date, datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Iterator, Optional
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -18,7 +18,7 @@ from dagster import (
     MetadataValue,
     asset,
     AssetObservation,
-    AssetMaterialization,
+    MaterializeResult,
 )
 
 from rtoe_ue.defs.partitions.dates import CREATION_DATE_PARTITIONS
@@ -121,9 +121,9 @@ def _today_partition_key(tz_name: str) -> str:
         "Write-once: if parquet exists, skip (no failure). "
         "Disallow running for today's date: fail but continue other partitions."
     ),
-    code_version="v4",
+    code_version="v5",
 )
-def collect_gp_history_data(context) -> None:
+def collect_gp_history_data(context) -> Iterator[MaterializeResult]:
     s3 = context.resources.s3_resource
     spacetrack = context.resources.spacetrack_resource
 
@@ -161,29 +161,25 @@ def collect_gp_history_data(context) -> None:
             _s3_put_json(s3, BUCKET, run_log_key, log_body)
             _s3_put_json(s3, BUCKET, latest_log_key, log_body)
 
-            context.log_event(
-                AssetMaterialization(
-                    asset_key=context.asset_key,
-                    partition=creation_date_key,
-                    metadata={
-                        "creation_date": creation_date_key,
-                        "gp_history_rows_fetched": latest_metadata.get("fetched_rows"),
-                        "data_parquet": MetadataValue.path(
-                            latest_metadata.get("data_parquet_s3_uri")
-                        ),
-                        "ingest_log": MetadataValue.path(
-                            f"s3://{BUCKET}/{run_log_key}"
-                        ),
-                        "latest_summary": MetadataValue.path(
-                            f"s3://{BUCKET}/{latest_log_key}"
-                        ),
-                        "status": "skipped_partition",
-                        "reason": "parquet_already_exists",
-                    },
-                )
-            )
-
             skipped_count += 1
+
+            yield MaterializeResult(
+                asset_key=context.asset_key,
+                partition=creation_date_key,
+                metadata={
+                    "creation_date": creation_date_key,
+                    "gp_history_rows_fetched": latest_metadata.get("fetched_rows"),
+                    "data_parquet": MetadataValue.path(
+                        latest_metadata.get("data_parquet_s3_uri")
+                    ),
+                    "ingest_log": MetadataValue.path(f"s3://{BUCKET}/{run_log_key}"),
+                    "latest_summary": MetadataValue.path(
+                        f"s3://{BUCKET}/{latest_log_key}"
+                    ),
+                    "status": "skipped_partition",
+                    "reason": "parquet_already_exists",
+                },
+            )
 
             continue
 
@@ -250,28 +246,22 @@ def collect_gp_history_data(context) -> None:
             _s3_put_json(s3, BUCKET, run_log_key, log_body)
             _s3_put_json(s3, BUCKET, latest_log_key, log_body)
 
-            context.log_event(
-                AssetMaterialization(
-                    asset_key=context.asset_key,
-                    partition=creation_date_key,
-                    metadata={
-                        "creation_date": creation_date_key,
-                        "gp_history_rows_fetched": rows_fetched,
-                        "data_parquet": MetadataValue.path(
-                            f"s3://{BUCKET}/{parquet_key}"
-                        ),
-                        "ingest_log": MetadataValue.path(
-                            f"s3://{BUCKET}/{run_log_key}"
-                        ),
-                        "latest_summary": MetadataValue.path(
-                            f"s3://{BUCKET}/{latest_log_key}"
-                        ),
-                        "status": "materialized",
-                    },
-                )
-            )
-
             materialized_count += 1
+
+            yield MaterializeResult(
+                asset_key=context.asset_key,
+                partition=creation_date_key,
+                metadata={
+                    "creation_date": creation_date_key,
+                    "gp_history_rows_fetched": rows_fetched,
+                    "data_parquet": MetadataValue.path(f"s3://{BUCKET}/{parquet_key}"),
+                    "ingest_log": MetadataValue.path(f"s3://{BUCKET}/{run_log_key}"),
+                    "latest_summary": MetadataValue.path(
+                        f"s3://{BUCKET}/{latest_log_key}"
+                    ),
+                    "status": "materialized",
+                },
+            )
 
         except Failure as e:
             # If SpaceTrackClient exhausts rate limit retries, you get a Failure here.
