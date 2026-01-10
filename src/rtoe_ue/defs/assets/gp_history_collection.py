@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gc
 import io
 import json
 import os
@@ -53,11 +54,48 @@ def _s3_put_json(s3, bucket: str, key: str, payload: Dict[str, Any]) -> None:
     )
 
 
-def _df_to_parquet_bytes(df: pd.DataFrame) -> bytes:
-    table = pa.Table.from_pandas(df, preserve_index=False)
+def _write_df_to_s3_parquet(
+    s3,
+    bucket: str,
+    key: str,
+    df: pd.DataFrame,
+) -> None:
+    """
+    Write parquet without creating a giant `bytes` copy.
+
+    Key difference vs your old approach:
+      - NO buf.getvalue() (which duplicates the parquet in memory)
+      - Upload the buffer directly to S3
+    """
     buf = io.BytesIO()
-    pq.write_table(table, buf, compression="snappy")
-    return buf.getvalue()
+    try:
+        table = pa.Table.from_pandas(df, preserve_index=False)
+        pq.write_table(table, buf, compression="snappy")
+        buf.seek(0)
+
+        # Prefer streaming upload to avoid duplicating bytes
+        if hasattr(s3, "upload_fileobj"):
+            s3.upload_fileobj(buf, bucket, key)
+        else:
+            # Fallback (less memory-friendly): still avoids the extra copy from getvalue()
+            s3.put_object(
+                Bucket=bucket,
+                Key=key,
+                Body=buf.getbuffer(),  # no duplicate bytes object
+                ContentType="application/octet-stream",
+            )
+    finally:
+        # Critical: explicitly drop Arrow objects and buffers
+        try:
+            del table
+        except NameError:
+            pass
+
+        buf.close()
+        del buf
+
+        # Encourage Arrow to return pooled memory
+        pa.default_memory_pool().release_unused()
 
 
 def _today_partition_key(tz_name: str) -> str:
@@ -76,7 +114,7 @@ def _today_partition_key(tz_name: str) -> str:
         "Write-once: if parquet exists, skip (no failure). "
         "Disallow running for today's date: fail but continue other partitions."
     ),
-    code_version="v2",
+    code_version="v3",
 )
 def collect_gp_history_data(context) -> None:
     s3 = context.resources.s3_resource
@@ -173,15 +211,24 @@ def collect_gp_history_data(context) -> None:
             continue
 
         try:
-            df = pd.DataFrame(spacetrack.fetch_gp_history(creation_date_obj))
+            raw = spacetrack.fetch_gp_history(creation_date_obj)
+            df = pd.DataFrame(raw)
+            del raw
 
-            parquet_bytes = _df_to_parquet_bytes(df)
-            s3.put_object(
-                Bucket=BUCKET,
-                Key=parquet_key,
-                Body=parquet_bytes,
-                ContentType="application/octet-stream",
+            _write_df_to_s3_parquet(
+                s3,
+                BUCKET,
+                parquet_key,
+                df,
             )
+
+            # Immediately drop big objects before logging / next iteration
+            rows_fetched = int(len(df))
+            del df
+
+            # Encourage Python + Arrow to release memory between partitions
+            gc.collect()
+            pa.default_memory_pool().release_unused()
 
             now = datetime.now(timezone.utc).isoformat()
             log_body = {
@@ -191,7 +238,7 @@ def collect_gp_history_data(context) -> None:
                 "timestamp_utc": now,
                 "status": "materialized",
                 "data_parquet_s3_uri": f"s3://{BUCKET}/{parquet_key}",
-                "fetched_rows": int(len(df)),
+                "fetched_rows": rows_fetched,
             }
             _s3_put_json(s3, BUCKET, run_log_key, log_body)
             _s3_put_json(s3, BUCKET, latest_log_key, log_body)
@@ -202,7 +249,7 @@ def collect_gp_history_data(context) -> None:
                     partition=creation_date_key,
                     metadata={
                         "creation_date": creation_date_key,
-                        "gp_history_rows_fetched": len(df),
+                        "gp_history_rows_fetched": rows_fetched,
                         "data_parquet": MetadataValue.path(
                             f"s3://{BUCKET}/{parquet_key}"
                         ),
@@ -251,6 +298,17 @@ def collect_gp_history_data(context) -> None:
             _s3_put_json(s3, BUCKET, latest_log_key, log_body)
             failures.append(f"{creation_date_key}: {repr(e)}")
             continue
+        finally:
+            # Always attempt to release memory between iterations
+            try:
+                if "raw" in locals():
+                    del raw
+                if "df" in locals():
+                    del df
+            except Exception:
+                pass
+            gc.collect()
+            pa.default_memory_pool().release_unused()
 
     context.add_output_metadata(
         {
