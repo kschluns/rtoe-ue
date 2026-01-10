@@ -121,7 +121,7 @@ def _today_partition_key(tz_name: str) -> str:
         "Write-once: if parquet exists, skip (no failure). "
         "Disallow running for today's date: fail but continue other partitions."
     ),
-    code_version="v5",
+    code_version="v6",
 )
 def collect_gp_history_data(context) -> Iterator[MaterializeResult]:
     s3 = context.resources.s3_resource
@@ -165,7 +165,6 @@ def collect_gp_history_data(context) -> Iterator[MaterializeResult]:
 
             yield MaterializeResult(
                 asset_key=context.asset_key,
-                partition=creation_date_key,
                 metadata={
                     "creation_date": creation_date_key,
                     "gp_history_rows_fetched": latest_metadata.get("fetched_rows"),
@@ -250,7 +249,6 @@ def collect_gp_history_data(context) -> Iterator[MaterializeResult]:
 
             yield MaterializeResult(
                 asset_key=context.asset_key,
-                partition=creation_date_key,
                 metadata={
                     "creation_date": creation_date_key,
                     "gp_history_rows_fetched": rows_fetched,
