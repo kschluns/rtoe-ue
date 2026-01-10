@@ -39,7 +39,11 @@ gp_history_job = define_asset_job(
     description="Run gp_history collector.",
     selection=["collect_gp_history_data"],
     executor_def=in_process_executor,
-    tags={"concurrency_group": "spacetrack_gp_history"},
+    tags={
+        "concurrency_group": "spacetrack_gp_history",
+        "ecs/cpu": "256",
+        "ecs/memory": "1024",
+    },
 )
 
 # later:
