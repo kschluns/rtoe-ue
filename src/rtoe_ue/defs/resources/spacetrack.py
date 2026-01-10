@@ -144,44 +144,43 @@ class SpaceTrackClient:
         url = f"{self.BASE_URL}/basicspacedata/query/class/satcat/format/json"
         return self._get_json_with_rate_limit_backoff(url)
 
+    def fetch_gp_history(self, creation_date: date) -> List[Dict[str, Any]]:
+        """
+        Pull gp_history rows for a specific creation_date window:
+        CREATION_DATE/YYYY-MM-DD--YYYY-MM-DD+1/format/json
 
-def fetch_gp_history(self, creation_date: date) -> List[Dict[str, Any]]:
-    """
-    Pull gp_history rows for a specific creation_date window:
-      CREATION_DATE/YYYY-MM-DD--YYYY-MM-DD+1/format/json
+        Space-Track edge case:
+        - If the result set exceeds ~100K rows, Space-Track returns HTTP 500.
+        - In that case, split into two queries on NORAD_CAT_ID and concatenate results.
+        """
+        start = creation_date.isoformat()
+        end = (creation_date + timedelta(days=1)).isoformat()
 
-    Space-Track edge case:
-      - If the result set exceeds ~100K rows, Space-Track returns HTTP 500.
-      - In that case, split into two queries on NORAD_CAT_ID and concatenate results.
-    """
-    start = creation_date.isoformat()
-    end = (creation_date + timedelta(days=1)).isoformat()
+        base = (
+            f"{self.BASE_URL}/basicspacedata/query/class/gp_history/"
+            f"CREATION_DATE/{start}--{end}"
+        )
 
-    base = (
-        f"{self.BASE_URL}/basicspacedata/query/class/gp_history/"
-        f"CREATION_DATE/{start}--{end}"
-    )
+        url = f"{base}/format/json"
 
-    url = f"{base}/format/json"
+        def _split_fetch() -> List[Dict[str, Any]]:
+            url_lt = f"{base}/NORAD_CAT_ID/%3C40001/format/json"
+            url_gt = f"{base}/NORAD_CAT_ID/%3E40000/format/json"
+            left = self._get_json_with_rate_limit_backoff(url_lt)
+            right = self._get_json_with_rate_limit_backoff(url_gt)
+            return left + right
 
-    def _split_fetch() -> List[Dict[str, Any]]:
-        url_lt = f"{base}/NORAD_CAT_ID/%3C40001/format/json"
-        url_gt = f"{base}/NORAD_CAT_ID/%3E40000/format/json"
-        left = self._get_json_with_rate_limit_backoff(url_lt)
-        right = self._get_json_with_rate_limit_backoff(url_gt)
-        return left + right
+        try:
+            return self._get_json_with_rate_limit_backoff(url)
+        except requests.HTTPError as e:
+            resp = getattr(e, "response", None)
+            status = getattr(resp, "status_code", None)
 
-    try:
-        return self._get_json_with_rate_limit_backoff(url)
-    except requests.HTTPError as e:
-        resp = getattr(e, "response", None)
-        status = getattr(resp, "status_code", None)
+            # Treat 500 as "too many rows" for this endpoint and split the query.
+            if status == 500:
+                return _split_fetch()
 
-        # Treat 500 as "too many rows" for this endpoint and split the query.
-        if status == 500:
-            return _split_fetch()
-
-        raise
+            raise
 
 
 @resource
