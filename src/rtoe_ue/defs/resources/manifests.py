@@ -93,8 +93,11 @@ def read_space_weather_manifest_gz_json(
     if raw is None:
         return SpaceWeatherManifest(obs_dates=set())
 
-    with gzip.GzipFile(fileobj=io.BytesIO(raw), mode="rb") as gz:
-        payload = gz.read().decode("utf-8")
+    try:
+        with gzip.GzipFile(fileobj=io.BytesIO(raw), mode="rb") as gz:
+            payload = json.loads(gz.read().decode("utf-8"))
+    except (OSError, json.JSONDecodeError) as e:
+        raise RuntimeError(f"Invalid gzipped JSON manifest: {e}") from e
 
     dates = payload.get("obs_dates", [])
     # normalize / de-dupe
