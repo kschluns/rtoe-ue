@@ -12,7 +12,14 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 from botocore.exceptions import ClientError
-from dagster import BackfillPolicy, Failure, MetadataValue, asset, AssetMaterialization
+from dagster import (
+    BackfillPolicy,
+    Failure,
+    MetadataValue,
+    asset,
+    AssetObservation,
+    AssetMaterialization,
+)
 
 from rtoe_ue.defs.partitions.dates import CREATION_DATE_PARTITIONS
 
@@ -114,7 +121,7 @@ def _today_partition_key(tz_name: str) -> str:
         "Write-once: if parquet exists, skip (no failure). "
         "Disallow running for today's date: fail but continue other partitions."
     ),
-    code_version="v3",
+    code_version="v4",
 )
 def collect_gp_history_data(context) -> None:
     s3 = context.resources.s3_resource
@@ -310,15 +317,17 @@ def collect_gp_history_data(context) -> None:
             gc.collect()
             pa.default_memory_pool().release_unused()
 
-    context.add_output_metadata(
-        {
-            "partitions_attempted": len(context.partition_keys),
-            "partitions_materialized": materialized_count,
-            "partitions_skipped": skipped_count,
-            "partitions_failed": len(failures),
-        }
+    context.log_event(
+        AssetObservation(
+            asset_key=context.asset_key,
+            metadata={
+                "partitions_attempted": len(context.partition_keys),
+                "partitions_materialized": materialized_count,
+                "partitions_skipped": skipped_count,
+                "partitions_failed": len(failures),
+            },
+        )
     )
-
     # If any partitions were disallowed or failed, fail the run after processing all partitions.
     # This satisfies: "create a failure in Dagster, but shouldn't prevent the loop continuing other dates."
     if failures:
