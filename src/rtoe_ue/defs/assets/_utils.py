@@ -42,10 +42,10 @@ def s3_key_exists(s3, bucket: str, key: str) -> bool:
 def read_parquet_df_from_s3(
     s3, bucket: str, key: str, columns: List = None
 ) -> pd.DataFrame:
-    obj = s3.get_object(Bucket=bucket, Key=key, columns=columns)
+    obj = s3.get_object(Bucket=bucket, Key=key)
     raw = obj["Body"].read()
     buf = io.BytesIO(raw)
-    return pd.read_parquet(buf)
+    return pd.read_parquet(buf, columns=columns)
 
 
 def df_records(df: pd.DataFrame, cols: Sequence[str]) -> List[Tuple]:
