@@ -71,7 +71,7 @@ def load_df_to_rds(conn, df: pd.DataFrame) -> tuple[int, int]:
         COPY gp_history_stage (
             gp_id, norad_cat_id, epoch_utc, tle_line0, tle_line1, tle_line2, creation_date_utc
         )
-        FROM STDIN WITH (FORMAT CSV)
+        FROM STDIN
     """
 
     merge_sql = """
