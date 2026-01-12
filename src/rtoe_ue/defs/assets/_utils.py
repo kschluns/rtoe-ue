@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import gc
 import io
 from dataclasses import dataclass
 from typing import Iterable, List, Optional, Sequence, Tuple
 
 import pandas as pd
+import pyarrow as pa
 
 
 @dataclass(frozen=True)
@@ -45,10 +47,21 @@ def read_parquet_df_from_s3(
     obj = s3.get_object(Bucket=bucket, Key=key)
     body = obj["Body"]
     try:
-        return pd.read_parquet(body, columns=columns)
+        raw = body.read()
+        buf = io.BytesIO(raw)
+        try:
+            return pd.read_parquet(buf, columns=columns)
+        finally:
+            buf.close()
+            # help refcounting drop big objects sooner
+            del buf
+            del raw
     finally:
         # Important: return connection to pool promptly
         body.close()
+        # Encourage Arrow to return pooled memory
+        gc.collect()
+        pa.default_memory_pool().release_unused()
 
 
 def df_records(df: pd.DataFrame, cols: Sequence[str]) -> List[Tuple]:
