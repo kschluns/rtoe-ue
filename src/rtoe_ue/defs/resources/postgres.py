@@ -27,7 +27,12 @@ def _pg_iam_config_from_env() -> PostgresIAMConfig:
 
 
 def _generate_iam_auth_token(cfg: PostgresIAMConfig) -> str:
-    rds = boto3.client("rds")
+    session = boto3.session.Session()
+    if not session.region_name:
+        raise RuntimeError(
+            "AWS region not resolved; set AWS_REGION or AWS_DEFAULT_REGION"
+        )
+    rds = session.client("rds")
     return rds.generate_db_auth_token(
         DBHostname=cfg.host,
         Port=cfg.port,
@@ -43,6 +48,10 @@ def postgres_resource(_context) -> Iterator[psycopg.Connection]:
     """
     cfg = _pg_iam_config_from_env()
     token = _generate_iam_auth_token(cfg)
+    _context.log.info(
+        f"IAM Postgres connect: host={cfg.host} port={cfg.port} db={cfg.dbname} user={cfg.user}"
+    )
+    _context.log.info(str(token))
 
     conn = psycopg.connect(
         host=cfg.host,
