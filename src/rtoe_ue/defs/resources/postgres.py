@@ -21,7 +21,7 @@ def _pg_config_from_env() -> PostgresConfig:
     return PostgresConfig(
         host=os.environ["DAGSTER_PG_HOST"],
         port=int(os.environ.get("DAGSTER_PG_PORT", "5432")),
-        dbname=os.environ["DAGSTER_PG_DB"],
+        dbname="rtoe_ue",
         user=os.environ["DAGSTER_PG_USER"],
         password=os.environ["DAGSTER_PG_PASSWORD"],
     )
