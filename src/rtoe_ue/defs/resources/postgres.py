@@ -48,10 +48,6 @@ def postgres_resource(_context) -> Iterator[psycopg.Connection]:
     """
     cfg = _pg_iam_config_from_env()
     token = _generate_iam_auth_token(cfg)
-    _context.log.info(
-        f"IAM Postgres connect: host={cfg.host} port={cfg.port} db={cfg.dbname} user={cfg.user}"
-    )
-    _context.log.info(str(token))
 
     conn = psycopg.connect(
         host=cfg.host,
