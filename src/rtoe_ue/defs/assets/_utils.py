@@ -39,8 +39,10 @@ def s3_key_exists(s3, bucket: str, key: str) -> bool:
         raise
 
 
-def read_parquet_df_from_s3(s3, bucket: str, key: str) -> pd.DataFrame:
-    obj = s3.get_object(Bucket=bucket, Key=key)
+def read_parquet_df_from_s3(
+    s3, bucket: str, key: str, columns: List = None
+) -> pd.DataFrame:
+    obj = s3.get_object(Bucket=bucket, Key=key, columns=columns)
     raw = obj["Body"].read()
     buf = io.BytesIO(raw)
     return pd.read_parquet(buf)
