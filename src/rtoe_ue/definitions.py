@@ -54,7 +54,7 @@ load_rds_by_ingestion_date_job = define_asset_job(
 load_rds_by_creation_date_job = define_asset_job(
     name="load_rds_by_creation_date_job",
     description="Load S3 parquet into RDS by creation date (Postgres).",
-    selection=["load_satcat_to_rds", "load_space_weather_to_rds"],
+    selection=["load_gp_history_to_rds"],
     executor_def=in_process_executor,
 )
 
