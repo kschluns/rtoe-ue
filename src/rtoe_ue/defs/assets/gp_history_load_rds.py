@@ -1,15 +1,16 @@
 from __future__ import annotations
 
+import gc
 import os
 from typing import Iterator
 
 import pandas as pd
+import pyarrow as pa
 from dagster import BackfillPolicy, MetadataValue, asset, AssetMaterialization
 
 from rtoe_ue.defs.assets._utils import (
     S3ParquetRef,
     coerce_utc_naive_timestamp,
-    df_records,
     read_parquet_df_from_s3,
     s3_key_exists,
 )
@@ -108,7 +109,7 @@ def load_df_to_rds(conn, df: pd.DataFrame) -> tuple[int, int]:
     required_resource_keys={"s3_resource", "postgres_resource"},
     deps=["collect_gp_history_data"],
     output_required=False,
-    code_version="v2",
+    code_version="v3",
     description="Load gp_history parquet from S3 into Postgres table public.gp_history (ON CONFLICT DO NOTHING).",
 )
 def load_gp_history_to_rds(context) -> Iterator[AssetMaterialization]:
@@ -165,6 +166,11 @@ def load_gp_history_to_rds(context) -> Iterator[AssetMaterialization]:
 
         rows_staged, rows_inserted_est = load_df_to_rds(conn, df)
         conn.commit()
+
+        # Encourage Python + Arrow to release memory between partitions
+        del df
+        gc.collect()
+        pa.default_memory_pool().release_unused()
 
         yield AssetMaterialization(
             asset_key=context.asset_key,

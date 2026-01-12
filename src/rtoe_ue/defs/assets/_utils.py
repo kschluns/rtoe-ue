@@ -43,9 +43,12 @@ def read_parquet_df_from_s3(
     s3, bucket: str, key: str, columns: List = None
 ) -> pd.DataFrame:
     obj = s3.get_object(Bucket=bucket, Key=key)
-    raw = obj["Body"].read()
-    buf = io.BytesIO(raw)
-    return pd.read_parquet(buf, columns=columns)
+    body = obj["Body"]
+    try:
+        return pd.read_parquet(body, columns=columns)
+    finally:
+        # Important: return connection to pool promptly
+        body.close()
 
 
 def df_records(df: pd.DataFrame, cols: Sequence[str]) -> List[Tuple]:
