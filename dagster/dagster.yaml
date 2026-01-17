@@ -28,12 +28,8 @@ run_coordinator:
     max_concurrent_runs: 10   # pick something sane
     tag_concurrency_limits:
       - key: "concurrency_group"
-        value: "spacetrack_gp_history_collect"
+        value: "spacetrack_gp_history"
         limit: 1
-    tag_concurrency_limits:
-      - key: "concurrency_group"
-        value: "spacetrack_gp_history_load"
-        limit: 2
 
 run_launcher:
   module: dagster_aws.ecs

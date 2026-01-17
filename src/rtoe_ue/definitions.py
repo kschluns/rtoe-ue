@@ -38,7 +38,7 @@ gp_history_job = define_asset_job(
     selection=["collect_gp_history_data"],
     executor_def=in_process_executor,
     tags={
-        "concurrency_group": "spacetrack_gp_history_collect",
+        "concurrency_group": "spacetrack_gp_history",
         "ecs/cpu": "256",
         "ecs/memory": "1024",
     },
@@ -57,7 +57,7 @@ load_rds_by_creation_date_job = define_asset_job(
     selection=["load_gp_history_to_rds"],
     executor_def=in_process_executor,
     tags={
-        "concurrency_group": "spacetrack_gp_history_load",
+        "concurrency_group": "spacetrack_gp_history",
     },
 )
 
