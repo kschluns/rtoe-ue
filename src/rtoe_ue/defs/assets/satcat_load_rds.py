@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from datetime import date
+from typing import Iterator
 
 import pandas as pd
 from dagster import BackfillPolicy, MetadataValue, asset, AssetMaterialization
@@ -64,17 +65,12 @@ def _transform_satcat(df: pd.DataFrame, ingestion_date: str) -> pd.DataFrame:
     backfill_policy=BackfillPolicy.multi_run(max_partitions_per_run=10),
     required_resource_keys={"s3_resource", "postgres_resource"},
     deps=["collect_satcat_data"],
-    code_version="v1",
+    output_required=False,
+    code_version="v2",
     output_required=False,
     description="Load SATCAT delta parquet from S3 into Postgres table public.satcat (ON CONFLICT DO NOTHING).",
 )
-def load_satcat_to_rds(context) -> None:
-
-    # Dagster doesn't let us mutate decorator args; keep a runtime guard
-    if context.asset_def.partitions_def is None:
-        # This is just defensive; your Definitions wiring will still run.
-        pass
-
+def load_satcat_to_rds(context) -> Iterator[AssetMaterialization]:
     s3 = context.resources.s3_resource
     conn = context.resources.postgres_resource
 

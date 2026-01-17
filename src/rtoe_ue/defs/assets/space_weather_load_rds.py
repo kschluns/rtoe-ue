@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from datetime import date, datetime, timedelta
+from typing import Iterator
 
 import pandas as pd
 from dagster import BackfillPolicy, MetadataValue, asset, AssetMaterialization
@@ -59,7 +60,11 @@ def _transform_space_weather_day(df: pd.DataFrame, ingestion_date: str) -> pd.Da
     out["f107_adj_last81"] = pd.to_numeric(df.get("F10.7_ADJ_LAST81"), errors="coerce")
     out["ingestion_date"] = date.fromisoformat(ingestion_date)
 
-    out = out.dropna(subset=["date_utc"])
+    out = (
+        out.dropna(subset=["date_utc"])
+        .query("f107_data_type == 'OBS'")
+        .reset_index(drop=True)
+    )
     return out
 
 
@@ -109,13 +114,14 @@ def _transform_space_weather_3h(df: pd.DataFrame, ingestion_date: str) -> pd.Dat
     backfill_policy=BackfillPolicy.multi_run(max_partitions_per_run=10),
     required_resource_keys={"s3_resource", "postgres_resource"},
     deps=["collect_space_weather_data"],
-    code_version="v1",
+    output_required=False,
+    code_version="v2",
     description=(
         "Load Space Weather delta parquet from S3 into Postgres tables "
         "public.space_weather_day and public.space_weather_3h (ON CONFLICT DO NOTHING)."
     ),
 )
-def load_space_weather_to_rds(context) -> None:
+def load_space_weather_to_rds(context) -> Iterator[AssetMaterialization]:
     s3 = context.resources.s3_resource
     conn = context.resources.postgres_resource
 
