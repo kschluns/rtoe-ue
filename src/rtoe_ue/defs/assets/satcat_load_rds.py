@@ -67,7 +67,6 @@ def _transform_satcat(df: pd.DataFrame, ingestion_date: str) -> pd.DataFrame:
     deps=["collect_satcat_data"],
     output_required=False,
     code_version="v2",
-    output_required=False,
     description="Load SATCAT delta parquet from S3 into Postgres table public.satcat (ON CONFLICT DO NOTHING).",
 )
 def load_satcat_to_rds(context) -> Iterator[AssetMaterialization]:
