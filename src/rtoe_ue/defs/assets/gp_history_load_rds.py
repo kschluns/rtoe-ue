@@ -105,7 +105,7 @@ def load_df_to_rds(conn, df: pd.DataFrame) -> tuple[int, int]:
 @asset(
     name="load_gp_history_to_rds",
     partitions_def=CREATION_DATE_PARTITIONS,
-    backfill_policy=BackfillPolicy.multi_run(max_partitions_per_run=10),
+    backfill_policy=BackfillPolicy.multi_run(max_partitions_per_run=100),
     required_resource_keys={"s3_resource", "postgres_resource"},
     deps=["collect_gp_history_data"],
     output_required=False,
